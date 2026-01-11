@@ -1,6 +1,6 @@
 {
   "name": "next-page-to-app-converter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Convert Next.js Pages Router to App Router",
   "main": "dist/index.js",
   "bin": {
@@ -11,7 +11,28 @@
     "build": "tsc",
     "dev": "ts-node --esm ./src/cli.ts"
   },
-  "keywords": [],
+  "keywords": [
+    "nextjs",
+    "next.js",
+    "nextjs-app-router",
+    "nextjs-pages-router",
+    "nextjs-migration",
+    "app-router",
+    "pages-router",
+    "react",
+    "react-server-components",
+    "use-client",
+    "cli",
+    "node-cli",
+    "codemod",
+    "code-mod",
+    "ast",
+    "typescript",
+    "babel",
+    "developer-tools",
+    "frontend",
+    "web"
+  ],
   "files": [
     "dist"
   ],
