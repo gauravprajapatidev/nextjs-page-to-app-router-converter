@@ -101,80 +101,11 @@ Based on analysis results:
 - Suggests and applies fixes automatically
 - Stops server after validation
 
-## Component Classification Examples
-
-### ✅ Server Component (No "use client" needed)
-```tsx
-// app/page.tsx
-export default async function Page() {
-  const data = await fetch('https://api.example.com/data');
-  return <div>{data.title}</div>;
-}
-```
-
-### 🔵 Client Component (Automatic "use client" added)
-```tsx
-// Client Component: Uses React hooks
-"use client";
-
-import { useState } from 'react';
-
-export default function Counter() {
-  const [count, setCount] = useState(0);
-  return <button onClick={() => setCount(count + 1)}>{count}</button>;
-}
-```
-
-### 🔵 Client Component (Browser API detected)
-```tsx
-// Client Component: Uses browser APIs
-"use client";
-
-export default function LocalStorage() {
-  const save = () => localStorage.setItem('key', 'value');
-  return <button onClick={save}>Save</button>;
-}
-```
-
-## Detection Rules
-
-The tool classifies components as **Client Components** when they:
-
-1. **Use React Hooks**
-   - `useState`, `useEffect`, `useContext`, `useReducer`, etc.
-   - Custom hooks (functions starting with "use")
-
-2. **Use Event Handlers**
-   - `onClick`, `onChange`, `onSubmit`, etc.
-
-3. **Use Browser APIs**
-   - `window`, `document`, `localStorage`, `navigator`, etc.
-
-4. **Import Client-Only Libraries**
-   - `react-query`, `zustand`, `framer-motion`, etc.
-   - See full list in `componentTypes.ts`
-
 ## Requirements
 
 - Node.js 18+
 - Next.js 13+ (target project)
 - Next.js 16+ (for runtime validation with --validate flag)
-
-## Project Structure
-
-```
-src/
-├── cli.ts                      # CLI entry point
-├── index.ts                    # Main migration orchestrator
-├── migrate/
-│   ├── analyzeComponent.ts     # Component analysis engine
-│   ├── componentTypes.ts       # Type definitions and constants
-│   ├── transformPage.ts        # Page transformation logic
-│   ├── validateWithDevTools.ts # Runtime validation (Next.js 16+)
-│   └── ...                     # Other migration utilities
-└── utils/
-    └── logger.ts               # Logging and reporting
-```
 
 ## Advanced Features
 
@@ -227,14 +158,6 @@ import { useState } from 'react';
 - Review auto-generated "use client" directives
 - Check for server-only code in client components
 - Verify imported components are correctly classified
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Submit a pull request
 
 ## License
 
