@@ -1,7 +1,15 @@
 import { Project, SyntaxKind, ScriptTarget, ModuleKind } from "ts-morph";
 import path from "path";
+import {
+  analyzeComponentFile,
+  hasUseClientDirective,
+} from "./analyzeComponent.js";
 
-export function transformPage(filePath: string, fileContent: string): string {
+export function transformPage(
+  filePath: string,
+  fileContent: string,
+  projectRoot?: string
+): string {
   const project = new Project({
     compilerOptions: {
       target: ScriptTarget.ESNext,
@@ -13,39 +21,66 @@ export function transformPage(filePath: string, fileContent: string): string {
 
   const sourceFile = project.createSourceFile("page.tsx", fileContent);
   let isClient = false;
+  let analysisReasons: string[] = [];
 
-  // 1. Check for Client Component indicators (Hooks, Event Handlers, specific imports)
-  const hasHooks = sourceFile
-    .getDescendantsOfKind(SyntaxKind.CallExpression)
-    .some((call) => {
-      const text = call.getExpression().getText();
-      return text.startsWith("use") && text !== "useServerInsertedHTML";
-    });
-
-  const hasEventHandlers = sourceFile
-    .getDescendantsOfKind(SyntaxKind.JsxAttribute)
-    .some((attr) => {
-      const name = attr.getNameNode().getText();
-      return name.startsWith("on") && name !== "on"; // e.g. onClick, onChange
-    });
-
-  const importsReactHooks = sourceFile.getImportDeclarations().some((decl) => {
-    const moduleSpecifier = decl.getModuleSpecifierValue();
-    if (moduleSpecifier === "react") {
-      return decl.getNamedImports().some((ni) => {
-        const name = ni.getName();
-        return (
-          name === "useState" ||
-          name === "useEffect" ||
-          name === "useContext" ||
-          name === "useReducer"
-        );
-      });
+  // Use comprehensive component analysis
+  // Note: We analyze the actual file if projectRoot is provided for better accuracy
+  let componentAnalysis;
+  if (projectRoot && filePath) {
+    try {
+      componentAnalysis = analyzeComponentFile(filePath, projectRoot);
+      isClient = componentAnalysis.classification === "client";
+      analysisReasons = componentAnalysis.reasons;
+    } catch (error) {
+      // Fallback to basic detection if analysis fails
+      console.warn(
+        `Component analysis failed for ${filePath}, using basic detection`
+      );
     }
-    return false;
-  });
+  }
 
-  const usesHooks = hasHooks || hasEventHandlers || importsReactHooks;
+  // Fallback: Basic detection if analysis not available
+  if (!componentAnalysis) {
+    // 1. Check for Client Component indicators (Hooks, Event Handlers, specific imports)
+    const hasHooks = sourceFile
+      .getDescendantsOfKind(SyntaxKind.CallExpression)
+      .some((call) => {
+        const text = call.getExpression().getText();
+        return text.startsWith("use") && text !== "useServerInsertedHTML";
+      });
+
+    const hasEventHandlers = sourceFile
+      .getDescendantsOfKind(SyntaxKind.JsxAttribute)
+      .some((attr) => {
+        const name = attr.getNameNode().getText();
+        return name.startsWith("on") && name !== "on"; // e.g. onClick, onChange
+      });
+
+    const importsReactHooks = sourceFile
+      .getImportDeclarations()
+      .some((decl) => {
+        const moduleSpecifier = decl.getModuleSpecifierValue();
+        if (moduleSpecifier === "react") {
+          return decl.getNamedImports().some((ni) => {
+            const name = ni.getName();
+            return (
+              name === "useState" ||
+              name === "useEffect" ||
+              name === "useContext" ||
+              name === "useReducer"
+            );
+          });
+        }
+        return false;
+      });
+
+    const usesHooks = hasHooks || hasEventHandlers || importsReactHooks;
+    isClient = usesHooks;
+
+    if (hasHooks) analysisReasons.push("Uses React hooks");
+    if (hasEventHandlers) analysisReasons.push("Uses event handlers");
+    if (importsReactHooks) analysisReasons.push("Imports React hooks");
+  }
 
   // 2. Check for GSSP (Server Data Fetching)
   const gssp = sourceFile.getFunction("getServerSideProps");
@@ -134,10 +169,14 @@ export function transformPage(filePath: string, fileContent: string): string {
 
     gssp?.remove();
     gsp?.remove();
-  } else if (usesHooks) {
+  } else if (isClient) {
     // Strategy: Client Component
-    isClient = true;
-    sourceFile.insertStatements(0, '"use client";\n');
+    // Add "use client" directive with explanation
+    const reasonComment =
+      analysisReasons.length > 0
+        ? `// Client Component: ${analysisReasons.join(", ")}\n`
+        : "";
+    sourceFile.insertStatements(0, `${reasonComment}"use client";\n`);
   }
 
   // 3. Transform useRouter -> import from next/navigation

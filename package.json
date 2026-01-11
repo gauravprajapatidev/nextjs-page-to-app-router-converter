@@ -1,7 +1,7 @@
 {
   "name": "next-page-to-app-converter",
   "version": "1.0.0",
-  "description": "",
+  "description": "Convert Next.js Pages Router to App Router",
   "main": "dist/index.js",
   "bin": {
     "next-pages-to-app": "dist/cli.js"
@@ -12,7 +12,10 @@
     "dev": "ts-node --esm ./src/cli.ts"
   },
   "keywords": [],
-  "author": "",
+  "files": [
+    "dist"
+  ],
+  "author": "Gaurav Prajapati",
   "license": "ISC",
   "type": "module",
   "dependencies": {

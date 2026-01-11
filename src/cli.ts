@@ -9,12 +9,17 @@ import { migrate } from "./index.js";
 const program = new Command();
 
 console.log(
-  boxen(chalk.cyan(figlet.textSync("Next.js Migrate", { horizontalLayout: "full" })), {
-    padding: 1,
-    margin: 1,
-    borderStyle: "round",
-    borderColor: "cyan",
-  })
+  boxen(
+    chalk.cyan(
+      figlet.textSync("Next.js Migrate", { horizontalLayout: "full" })
+    ),
+    {
+      padding: 1,
+      margin: 1,
+      borderStyle: "round",
+      borderColor: "cyan",
+    }
+  )
 );
 
 program
@@ -22,6 +27,11 @@ program
   .description("Migrate Next.js Pages Router to App Router")
   .argument("[projectPath]", "Path to the Next.js project")
   .option("-d, --dry-run", "Run the migration in dry-run mode", false)
+  .option(
+    "-v, --validate",
+    "Validate conversion with Next.js DevTools (requires Next.js 16+)",
+    false
+  )
   .action(async (projectPath, options) => {
     let targetPath = projectPath;
 
@@ -36,8 +46,8 @@ program
     }
 
     if (!targetPath) {
-        console.log("Operation cancelled.");
-        process.exit(0);
+      console.log("Operation cancelled.");
+      process.exit(0);
     }
 
     await migrate(targetPath, options);

@@ -10,6 +10,8 @@ export function transformApi(filePath: string, fileContent: string): string {
     useInMemoryFileSystem: true,
   });
 
+  const isTypeScript = filePath.endsWith(".ts") || filePath.endsWith(".tsx");
+
   const sourceFile = project.createSourceFile("route.ts", fileContent);
 
   // Strategy for MVP:
@@ -88,8 +90,9 @@ export function transformApi(filePath: string, fileContent: string): string {
               "/* TODO: res.status($1) - status moved to NextResponse */"
             );
 
+            const requestParam = isTypeScript ? "request: Request" : "request";
             sourceFile.addStatements(`
-export async function ${method}(request: Request) {
+export async function ${method}(${requestParam}) {
   ${caseLogic}
 }
                       `);
@@ -103,7 +106,11 @@ export async function ${method}(request: Request) {
           fnd.setIsDefaultExport(false);
           fnd.setIsExported(true);
           fnd.rename("GET");
-          fnd.getParameters()[0]?.replaceWithText("request: Request");
+          if (isTypeScript) {
+            fnd.getParameters()[0]?.replaceWithText("request: Request");
+          } else {
+            fnd.getParameters()[0]?.replaceWithText("request");
+          }
           fnd.getParameters()[1]?.remove();
 
           let logic = fnd.getBody()?.getText() || "";

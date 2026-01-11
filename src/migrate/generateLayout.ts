@@ -35,10 +35,10 @@ export async function generateRootLayout(
     if (bodyAttrs.includes("className=")) {
       bodyAttrs = bodyAttrs.replace(
         /className=(["'])(.*?)\1/,
-        `className=$1$2 ${fontClasses}$1`
+        `className={\`$2 ${fontClasses}\`}`
       );
     } else {
-      bodyAttrs += ` className="${fontClasses}"`;
+      bodyAttrs += ` className={\`${fontClasses}\`}`;
     }
   }
 
