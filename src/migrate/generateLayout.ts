@@ -1,11 +1,19 @@
 import fs from "fs-extra";
 import path from "path";
+import { Project, SyntaxKind, ScriptTarget, ModuleKind } from "ts-morph";
 import { AppConfig } from "./extractAppConfig.js";
+import { analyzeComponentFile } from "./analyzeComponent.js";
+
+export interface LayoutInfo {
+  layoutContent: string;
+  needsClientDirective: boolean;
+  imports: string[];
+}
 
 export async function generateRootLayout(
   appDir: string,
   config: AppConfig,
-  options: { dryRun?: boolean; useTypeScript: boolean }
+  options: { dryRun?: boolean; useTypeScript: boolean },
 ): Promise<boolean> {
   const extension = options.useTypeScript ? "tsx" : "js";
   const layoutPath = path.join(appDir, `layout.${extension}`);
@@ -16,16 +24,28 @@ export async function generateRootLayout(
   }
 
   const cssImports = config.globalCssImports.join("\n");
-  const providersComment =
-    config.providers.length > 0
-      ? `\n  {/* ${config.providers.join(", ")} */}\n`
-      : "";
+
+  let providersImport = "";
+  let contentBody = "{children}";
+
+  if (config.providersInfo) {
+    await generateProvidersFile(appDir, config, options);
+    providersImport = `import { Providers } from "./providers";\n`;
+    contentBody = `<Providers>\n          {children}\n        </Providers>`;
+  } else if (config.providers.length > 0) {
+    contentBody = `{/* ${config.providers.join(", ")} */}\n        {children}`;
+  }
 
   // Font Injection
   const fontImports = config.fonts.map((f) => f.import).join("\n");
   const fontDecls = config.fonts.map((f) => f.declaration).join("\n");
   const fontClasses = config.fonts
-    .map((f) => `\${${f.variableName}.className}`)
+    .map((f) => {
+      if (f.variableOpt) {
+        return `\${${f.variableName}.className} \${${f.variableName}.variable}`;
+      }
+      return `\${${f.variableName}.className}`;
+    })
     .join(" ");
 
   const htmlAttrs = config.htmlAttributes ? ` ${config.htmlAttributes}` : "";
@@ -35,7 +55,7 @@ export async function generateRootLayout(
     if (bodyAttrs.includes("className=")) {
       bodyAttrs = bodyAttrs.replace(
         /className=(["'])(.*?)\1/,
-        `className={\`$2 ${fontClasses}\`}`
+        `className={\`$2 ${fontClasses}\`}`,
       );
     } else {
       bodyAttrs += ` className={\`${fontClasses}\`}`;
@@ -51,6 +71,7 @@ export async function generateRootLayout(
   const content = `import React from 'react';
 ${fontImports}
 ${cssImports}
+${providersImport}
 
 ${fontDecls}
 
@@ -64,8 +85,8 @@ export default function RootLayout({
 }${options.useTypeScript ? ": {\n  children: React.ReactNode;\n}" : ""}) {
   return (
     <html${finalHtmlAttrs}>
-      <body${bodyAttrs}>${providersComment}
-        {children}
+      <body${bodyAttrs}>
+        ${contentBody}
       </body>
     </html>
   );
@@ -77,6 +98,298 @@ export default function RootLayout({
   }
 
   await fs.ensureDir(appDir);
+  await fs.writeFile(layoutPath, content);
+
+  return true;
+}
+
+export async function generateProvidersFile(
+  appDir: string,
+  config: AppConfig,
+  options: { dryRun?: boolean; useTypeScript: boolean },
+): Promise<boolean> {
+  if (!config.providersInfo) {
+    return false;
+  }
+
+  const extension = options.useTypeScript ? "tsx" : "js";
+  const filePath = path.join(appDir, `providers.${extension}`);
+
+  if (fs.existsSync(filePath)) {
+    return false;
+  }
+
+  const imports = config.providersInfo.imports.join("\n");
+  const childrenType = options.useTypeScript
+    ? "{ children }: { children: React.ReactNode }"
+    : "{ children }";
+
+  const content = `"use client";
+
+${imports}
+
+export function Providers(${childrenType}) {
+  return (
+    ${config.providersInfo.content}
+  );
+}
+`;
+
+  if (options.dryRun) {
+    return true;
+  }
+
+  await fs.writeFile(filePath, content);
+  return true;
+}
+
+/**
+ * Extracts getLayout information from a page file
+ */
+export function extractGetLayout(
+  fileContent: string,
+  filePath: string,
+  projectRoot?: string,
+): LayoutInfo | null {
+  const project = new Project({
+    compilerOptions: {
+      target: ScriptTarget.ESNext,
+      module: ModuleKind.ESNext,
+      jsx: 1, // Preserve
+    },
+    useInMemoryFileSystem: true,
+  });
+
+  const sourceFile = project.createSourceFile("page.tsx", fileContent);
+
+  // Find the default export
+  const defaultExport = sourceFile
+    .getDefaultExportSymbol()
+    ?.getDeclarations()[0]
+    ?.asKind(SyntaxKind.FunctionDeclaration);
+
+  if (!defaultExport) {
+    return null;
+  }
+
+  // Look for Page.getLayout or getLayout property assignment
+  // Pattern: Page.getLayout = function getLayout(page) { ... }
+  // or: const Page = ...; Page.getLayout = ...
+  // or: export default function Page() {}; Page.getLayout = ...
+
+  // First, try to find property assignments after the default export
+  const statements = sourceFile.getStatements();
+  let getLayoutProp: any = null;
+
+  // Look for property access expressions: Page.getLayout = ...
+  for (const stmt of statements) {
+    if (stmt.getKind() === SyntaxKind.ExpressionStatement) {
+      const expr = stmt
+        .asKindOrThrow(SyntaxKind.ExpressionStatement)
+        .getExpression();
+      if (expr.getKind() === SyntaxKind.BinaryExpression) {
+        const binaryExpr = expr.asKindOrThrow(SyntaxKind.BinaryExpression);
+        const left = binaryExpr.getLeft();
+        if (left.getKind() === SyntaxKind.PropertyAccessExpression) {
+          const propAccess = left.asKindOrThrow(
+            SyntaxKind.PropertyAccessExpression,
+          );
+          const name = propAccess.getNameNode().getText();
+          const objectName = propAccess.getExpression().getText();
+
+          // Check if it's Page.getLayout or ComponentName.getLayout
+          if (name === "getLayout") {
+            const defaultExportName = defaultExport.getName();
+            if (
+              !defaultExportName ||
+              objectName === defaultExportName ||
+              objectName === "Page"
+            ) {
+              getLayoutProp = binaryExpr;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // If not found, look for it as a variable declaration or function declaration
+  if (!getLayoutProp) {
+    // Try searching for getLayout function in the file
+    const getLayoutFunc = sourceFile.getFunction("getLayout");
+    if (getLayoutFunc) {
+      // Check if it's assigned to Page.getLayout (might be in a different statement)
+      // For now, if we find a getLayout function, we'll treat it as the layout function
+      // This is a simplified approach - ideally we'd check the assignment
+      getLayoutProp = getLayoutFunc;
+    }
+  }
+
+  if (!getLayoutProp) {
+    return null;
+  }
+
+  // Extract the layout function body
+  let layoutFunction: any = null;
+  let layoutFunctionBody: string = "";
+
+  if (getLayoutProp.getKind() === SyntaxKind.BinaryExpression) {
+    // It's an assignment: Page.getLayout = function() { ... } or Page.getLayout = (page) => ...
+    const right = getLayoutProp.getRight();
+    layoutFunction = right;
+  } else if (getLayoutProp.getKind() === SyntaxKind.FunctionDeclaration) {
+    layoutFunction = getLayoutProp;
+  }
+
+  if (!layoutFunction) {
+    return null;
+  }
+
+  // Extract the function body
+  let returnExpression: any = null;
+
+  if (
+    layoutFunction.getKind() === SyntaxKind.FunctionDeclaration ||
+    layoutFunction.getKind() === SyntaxKind.FunctionExpression ||
+    layoutFunction.getKind() === SyntaxKind.ArrowFunction
+  ) {
+    const body = layoutFunction.getBody();
+    if (body) {
+      if (body.getKind() === SyntaxKind.Block) {
+        // Block body: { return <Layout>{page}</Layout>; }
+        const block = body.asKindOrThrow(SyntaxKind.Block);
+        const returnStmt = block.getStatementByKind(SyntaxKind.ReturnStatement);
+        if (returnStmt) {
+          returnExpression = returnStmt.getExpression();
+        }
+      } else {
+        // Expression body (arrow function): => <Component>{page}</Component>
+        returnExpression = body;
+      }
+    }
+  }
+
+  if (!returnExpression) {
+    return null;
+  }
+
+  // Extract the return expression as text and replace `page` with `children`
+  // The layout function typically returns: <Layout>{page}</Layout>
+  let layoutComponentContent = returnExpression.getText();
+
+  // Replace `page` with `children` - but be careful not to replace it in strings or comments
+  // Simple approach: replace word boundaries
+  layoutComponentContent = layoutComponentContent.replace(
+    /\bpage\b/g,
+    "children",
+  );
+
+  // Extract imports that might be needed for the layout
+  const imports: string[] = [];
+  sourceFile.getImportDeclarations().forEach((importDecl) => {
+    const moduleSpecifier = importDecl.getModuleSpecifierValue();
+    // Only include imports if they're likely used in the layout component
+    // This is a simplified approach - ideally we'd analyze what's actually used
+    imports.push(importDecl.getText());
+  });
+
+  // Check if the layout needs 'use client' directive
+  // Analyze the layout content to see if it uses hooks, event handlers, etc.
+  let needsClientDirective = false;
+
+  // Create a temporary source file with the layout component to analyze it
+  try {
+    const layoutProject = new Project({
+      compilerOptions: {
+        target: ScriptTarget.ESNext,
+        module: ModuleKind.ESNext,
+        jsx: 1,
+      },
+      useInMemoryFileSystem: true,
+    });
+
+    const layoutComponentCode = `export default function Layout({ children }: { children: React.ReactNode }) {
+  ${layoutComponentContent}
+}`;
+
+    const layoutSourceFile = layoutProject.createSourceFile(
+      "layout.tsx",
+      layoutComponentCode,
+    );
+
+    // Basic checks for client component indicators
+    const hasHooks = layoutSourceFile
+      .getDescendantsOfKind(SyntaxKind.CallExpression)
+      .some((call) => {
+        const text = call.getExpression().getText();
+        return text.startsWith("use") && text !== "useServerInsertedHTML";
+      });
+
+    const hasEventHandlers = layoutSourceFile
+      .getDescendantsOfKind(SyntaxKind.JsxAttribute)
+      .some((attr) => {
+        const name = attr.getNameNode().getText();
+        return name.startsWith("on") && name !== "on";
+      });
+
+    needsClientDirective = hasHooks || hasEventHandlers;
+  } catch (error) {
+    // If analysis fails, default to false (server component)
+    needsClientDirective = false;
+  }
+
+  return {
+    layoutContent: layoutComponentContent,
+    needsClientDirective,
+    imports: imports.length > 0 ? imports : [],
+  };
+}
+
+/**
+ * Generates a nested layout file from extracted layout information
+ */
+export async function generateNestedLayout(
+  layoutDir: string,
+  layoutInfo: LayoutInfo,
+  options: { dryRun?: boolean; useTypeScript: boolean },
+): Promise<boolean> {
+  const extension = options.useTypeScript ? "tsx" : "js";
+  const layoutPath = path.join(layoutDir, `layout.${extension}`);
+  const layoutJsPath = path.join(layoutDir, "layout.js");
+
+  if (fs.existsSync(layoutPath) || fs.existsSync(layoutJsPath)) {
+    return false; // Already exists
+  }
+
+  // Build the layout component code
+  const clientDirective = layoutInfo.needsClientDirective
+    ? '"use client";\n\n'
+    : "";
+  const importsSection =
+    layoutInfo.imports.length > 0 ? layoutInfo.imports.join("\n") + "\n\n" : "";
+
+  const layoutTypeAnnotation = options.useTypeScript
+    ? ": { children: React.ReactNode }"
+    : "";
+
+  const layoutTypeImport =
+    options.useTypeScript && !importsSection.includes("React")
+      ? "import React from 'react';\n"
+      : "";
+
+  const content = `${clientDirective}${layoutTypeImport}${importsSection}export default function Layout({
+  children
+}${layoutTypeAnnotation}) {
+  ${layoutInfo.layoutContent}
+}
+`;
+
+  if (options.dryRun) {
+    return true; // Simulate creation
+  }
+
+  await fs.ensureDir(layoutDir);
   await fs.writeFile(layoutPath, content);
 
   return true;

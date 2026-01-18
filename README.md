@@ -1,163 +1,61 @@
 # Next.js Pages to App Router Converter
 
-An intelligent CLI tool to migrate Next.js applications from Pages Router to App Router with **comprehensive component analysis** to automatically determine if components should be client-side or server-side.
+Automate your migration from Next.js Pages Router to App Router with intelligent component analysis and code transformation.
 
-## Features
+## 🚀 Key Features
 
-### 🔍 **Intelligent Component Analysis**
-- **Automatic Detection**: Analyzes components for hooks, event handlers, browser APIs, and client-only libraries
-- **Recursive Analysis**: Scans imported components to ensure correct client/server classification
-- **Smart "use client" Insertion**: Adds directives only where needed with explanatory comments
-- **Comprehensive Detection**:
-  - React hooks (useState, useEffect, useContext, etc.)
-  - Event handlers (onClick, onChange, etc.)
-  - Browser APIs (window, localStorage, navigator, etc.)
-  - Client-only libraries (react-query, zustand, framer-motion, etc.)
+*   **Smart Component Analysis**: Automatically determines if a component should be Server or Client based on hooks and browser API usage.
+*   **Data Fetching Migration**: Converts `getServerSideProps` and `getStaticProps` to async Server Components, including `generateStaticParams`.
+*   **Routing Updates**: Transforms `next/router` to `next/navigation` (`useRouter`, `usePathname`, `useSearchParams`).
+*   **API Routes**: Migrates API handlers to Route Handlers, updating `res` methods to `NextResponse`.
+*   **Metadata**: Converts `<Head>` tags to the Metadata API.
+*   **Layouts & Providers**: Automatically generates root layouts, nested layouts, and extracts context providers from `_app.tsx`.
+*   **Font Optimization**: Migrates `next/font` configurations.
 
-### 🚀 **Migration Capabilities**
-- Converts `getServerSideProps` and `getStaticProps` to async Server Components
-- Transforms `next/router` to `next/navigation`
-- Converts `<Head>` to metadata exports
-- Generates root `layout.tsx` with proper configuration
-- Handles API routes migration
-- Preserves TypeScript/JavaScript preferences
+## 📦 Installation & Usage
 
-### ✅ **Runtime Validation** (Optional)
-- Validates conversions by starting the Next.js dev server
-- Detects runtime errors automatically
-- Suggests fixes for common issues
-- Requires Next.js 16+ for full MCP integration
-
-## Installation
+### Quick Run
+You can likely run the tool directly (if published):
+```bash
+npx next-page-to-app-converter <project-path>
+```
 
 ### Global Installation
 ```bash
 npm install -g next-page-to-app-converter
+next-pages-to-app <project-path>
 ```
 
-### Local Development
-```bash
-git clone <repository-url>
-cd next-page-to-app-converter
-npm install
-npm run build
-npm link
-```
+## ⚙️ Options
 
-## Usage
+| Flag | Description |
+| :--- | :--- |
+| `-d, --dry-run` | Preview the migration without writing any files. |
+| `-v, --validate` | **(Experimental)** Runs runtime validation using Next.js DevTools (Requires Next.js 16+). |
+| `-h, --help` | Show all available commands and options. |
 
-### Basic Migration
-```bash
-next-pages-to-app /path/to/your/nextjs/project
-```
+## 🛠️ How It Works
 
-### Dry Run (Preview Changes)
-```bash
-next-pages-to-app /path/to/your/nextjs/project --dry-run
-```
+1.  **Scans** your `pages` directory for routes, API endpoints, and special files (`_app`, `_document`, `_error`).
+2.  **Analyzes** every component (and its imports) to detect:
+    *   React Hooks (`useState`, `useEffect`, etc.)
+    *   Event Handlers (`onClick`, `onChange`)
+    *   Browser-only APIs (`window`, `localstorage`)
+3.  **Transforms** the code:
+    *   Adds `"use client"` directives where needed.
+    *   Rewrites data fetching to `async` Server Components.
+    *   Updates navigation and routing logic.
+4.  **Generates** the new folder structure in the `app` directory, preserving your logic.
 
-### With Runtime Validation
-```bash
-next-pages-to-app /path/to/your/nextjs/project --validate
-```
+## ✅ Requirements
 
-### All Options
-```bash
-next-pages-to-app [projectPath] [options]
+*   **Node.js**: 18.0.0 or later
+*   **Target Project**: Next.js 13 or later (Next.js 16+ required for `--validate`)
 
-Options:
-  -d, --dry-run    Run migration in dry-run mode (no files written)
-  -v, --validate   Validate conversion with Next.js DevTools (requires Next.js 16+)
-  -h, --help       Display help information
-```
+## ❓ Troubleshooting
 
-## How It Works
-
-### 1. **Project Scanning**
-The tool scans your `pages` directory and identifies:
-- Regular pages
-- API routes
-- Error pages (_error.tsx)
-- Special files (_app.tsx, _document.tsx)
-
-### 2. **Component Analysis**
-For each component, the analyzer:
-- Detects React hooks usage
-- Identifies event handlers in JSX
-- Scans for browser-only APIs
-- Checks for client-only library imports
-- Recursively analyzes imported components
-
-### 3. **Intelligent Transformation**
-Based on analysis results:
-- **Server Components** (default): No "use client" directive needed
-- **Client Components**: Adds "use client" with explanatory comment
-- **Data Fetching**: Converts GSSP/GSP to async Server Component patterns
-- **Routing**: Updates router imports and usage
-
-### 4. **Validation** (Optional with --validate)
-- Starts Next.js dev server
-- Monitors for runtime errors
-- Suggests and applies fixes automatically
-- Stops server after validation
-
-## Requirements
-
-- Node.js 18+
-- Next.js 13+ (target project)
-- Next.js 16+ (for runtime validation with --validate flag)
-
-## Advanced Features
-
-### Recursive Component Analysis
-
-The tool doesn't just analyze the page component—it recursively scans all imported local components:
-
-```tsx
-// pages/index.tsx imports Button.tsx
-import Button from '../components/Button';
-
-// The analyzer will:
-// 1. Analyze pages/index.tsx
-// 2. Detect import of Button
-// 3. Analyze components/Button.tsx
-// 4. Classify both components correctly
-```
-
-### Smart Comment Generation
-
-When adding "use client", the tool explains why:
-
-```tsx
-// Client Component: Uses React hooks, Uses event handlers
-"use client";
-
-import { useState } from 'react';
-```
-
-## Limitations
-
-- **Dynamic Imports**: May not detect all dynamically imported components
-- **Conditional Logic**: Complex conditional rendering may require manual review
-- **Third-Party Libraries**: Detection limited to known client-only libraries
-- **Runtime Validation**: Requires Next.js 16+ and runnable project
-
-## Troubleshooting
-
-### "Component analysis failed"
-- Fallback to basic detection is used automatically
-- Check if TypeScript files can be parsed
-- Ensure project dependencies are installed
-
-### "Validation failed"
-- Ensure Next.js 16+ is installed
-- Check if `npm run dev` works manually
-- Verify no port conflicts (default: 3000)
-
-### Components still have errors after migration
-- Review auto-generated "use client" directives
-- Check for server-only code in client components
-- Verify imported components are correctly classified
+*   **Validation Issues**: The `--validate` flag relies on starting your dev server. Ensure `npm run dev` works on your project manually before running the tool.
+*   **Complex Logic**: While the tool handles most patterns, highly dynamic imports or complex custom server logic might require manual review after migration.
 
 ## License
 
@@ -166,5 +64,4 @@ ISC
 ## Acknowledgments
 
 - Built with [ts-morph](https://github.com/dsherret/ts-morph) for TypeScript AST manipulation
-- Uses [Next.js DevTools MCP](https://nextjs.org/docs) for runtime validation
 - Inspired by the Next.js community's migration needs

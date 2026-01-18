@@ -18,7 +18,17 @@ export function mapRoute(page: PageFile, targetAppDir: string): string {
 
   if (page.type === 'error') {
     let errorName = 'error';
-    if (fileName === '404') errorName = 'not-found';
+    if (fileName === '404') {
+      errorName = 'not-found';
+    } else if (fileName === '_error') {
+      // If _error.tsx is in root pages directory, map to global-error.tsx
+      // Otherwise map to error.tsx
+      if (dirName === '.' || dirName === '') {
+        errorName = 'global-error';
+      } else {
+        errorName = 'error';
+      }
+    }
     return path.join(targetAppDir, `${errorName}${page.extension}`);
   }
 

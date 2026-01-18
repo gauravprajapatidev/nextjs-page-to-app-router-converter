@@ -3,7 +3,11 @@ import fs from "fs-extra";
 
 export interface AppConfig {
   globalCssImports: string[];
-  providers: string[]; // List of provider component names (simplified for now)
+  providers: string[]; // List of provider component names (legacy)
+  providersInfo?: {
+    content: string;
+    imports: string[];
+  };
   htmlAttributes?: string; // e.g. lang="en"
   bodyAttributes?: string; // e.g. className="bg-white"
   hasCustomApp: boolean;
@@ -12,12 +16,13 @@ export interface AppConfig {
     import: string;
     declaration: string;
     variableName: string;
+    variableOpt?: string; // e.g. '--font-sans'
   }[];
 }
 
 export function extractAppConfig(
   appPath?: string,
-  documentPath?: string
+  documentPath?: string,
 ): AppConfig {
   const config: AppConfig = {
     globalCssImports: [],
@@ -56,7 +61,13 @@ export function extractAppConfig(
         const namedImports = importDecl
           .getNamedImports()
           .map((ni) => ni.getName());
-        if (namedImports.length > 0) {
+
+        const defaultImport = importDecl.getDefaultImport()?.getText();
+
+        const importedNames = [...namedImports];
+        if (defaultImport) importedNames.push(defaultImport);
+
+        if (importedNames.length > 0) {
           // Find initializations of these fonts
           sourceFile.getVariableDeclarations().forEach((varDecl) => {
             const initializer = varDecl.getInitializer();
@@ -65,14 +76,47 @@ export function extractAppConfig(
               initializer.getKind() === SyntaxKind.CallExpression
             ) {
               const callExpr = initializer.asKindOrThrow(
-                SyntaxKind.CallExpression
+                SyntaxKind.CallExpression,
               );
               const expression = callExpr.getExpression().getText();
-              if (namedImports.includes(expression)) {
+
+              if (importedNames.includes(expression)) {
+                // Check for variable option
+                let variableOpt: string | undefined;
+                const args = callExpr.getArguments();
+                if (
+                  args.length > 0 &&
+                  args[0].getKind() === SyntaxKind.ObjectLiteralExpression
+                ) {
+                  const objLiteral = args[0].asKindOrThrow(
+                    SyntaxKind.ObjectLiteralExpression,
+                  );
+                  const variableProp = objLiteral.getProperty("variable");
+                  if (
+                    variableProp &&
+                    variableProp.getKind() === SyntaxKind.PropertyAssignment
+                  ) {
+                    const propAssign = variableProp.asKindOrThrow(
+                      SyntaxKind.PropertyAssignment,
+                    );
+                    // Get the string value from initializer
+                    const init = propAssign.getInitializer();
+                    if (
+                      init &&
+                      (init.getKind() === SyntaxKind.StringLiteral ||
+                        init.getKind() ===
+                          SyntaxKind.NoSubstitutionTemplateLiteral)
+                    ) {
+                      variableOpt = init.getText().replace(/['"`]/g, "");
+                    }
+                  }
+                }
+
                 config.fonts.push({
                   import: importDecl.getText(),
                   declaration: varDecl.getParent().getParent().getText(), // Get the full 'const inter = ...'
                   variableName: varDecl.getName(),
+                  variableOpt,
                 });
               }
             }
@@ -87,52 +131,203 @@ export function extractAppConfig(
       // but it's often dynamic in _app. For now, we'll just inject the font in layout.
     }
 
-    // 2. Initial Provider Detection (MVP: Check for nested components in return statement)
-    // This is complex to do perfectly with AST without deep analysis,
-    // so for MVP we will look for 'Context.Provider' or common patterns if needed.
-    // For now, we'll mark a TODO if we detect a complex return.
-    let defaultExportDecl = sourceFile
+    // 2. Enhanced Provider Extraction
+    const defaultExportDecl = sourceFile
       .getDefaultExportSymbol()
       ?.getDeclarations()[0];
 
     if (defaultExportDecl) {
-      let componentBody: any = null;
+      let componentFn: any = null;
+
+      // Resolve the actual component function
       if (defaultExportDecl.getKind() === SyntaxKind.FunctionDeclaration) {
-        componentBody = (defaultExportDecl as any).getBody();
+        componentFn = defaultExportDecl;
       } else if (defaultExportDecl.getKind() === SyntaxKind.ExportAssignment) {
-        const identifier = (defaultExportDecl as any).getExpression().getText();
-        const originalDecl =
-          sourceFile.getFunction(identifier) ||
-          sourceFile.getVariableDeclaration(identifier);
-        if (originalDecl) {
-          if (originalDecl.getKind() === SyntaxKind.FunctionDeclaration) {
-            componentBody = (originalDecl as any).getBody();
-          } else if (
-            originalDecl.getKind() === SyntaxKind.VariableDeclaration
-          ) {
-            const initializer = (originalDecl as any).getInitializer();
-            if (
-              initializer &&
-              (initializer.getKind() === SyntaxKind.ArrowFunction ||
-                initializer.getKind() === SyntaxKind.FunctionExpression)
-            ) {
-              componentBody = initializer.getBody();
-            }
-          }
+        const expression = (defaultExportDecl as any).getExpression();
+        if (
+          expression.getKind() === SyntaxKind.FunctionExpression ||
+          expression.getKind() === SyntaxKind.ArrowFunction
+        ) {
+          componentFn = expression;
+        } else if (expression.getKind() === SyntaxKind.Identifier) {
+          const name = expression.getText();
+          componentFn =
+            sourceFile.getFunction(name) ||
+            sourceFile.getVariableDeclaration(name)?.getInitializer();
         }
       }
 
-      if (componentBody) {
-        // Find JsxElements that likely wrap children
-        const jsxElements = componentBody.getDescendantsOfKind(
-          SyntaxKind.JsxOpeningElement
-        );
-        jsxElements.forEach((el: any) => {
-          const name = el.getTagNameNode().getText();
-          if (name.includes("Provider") || name.match(/^[A-Z].*Context$/)) {
-            config.providers.push(name);
+      if (componentFn) {
+        // Find the 'Component' prop name
+        // function MyApp({ Component, pageProps })
+        let componentPropName = "Component";
+        const params = componentFn.getParameters();
+        if (params.length > 0) {
+          const firstParam = params[0];
+          if (
+            firstParam.getKind() === SyntaxKind.Parameter &&
+            firstParam.getNameNode().getKind() ===
+              SyntaxKind.ObjectBindingPattern
+          ) {
+            const bindingPattern = firstParam.getNameNode() as any;
+            bindingPattern.getElements().forEach((el: any) => {
+              if (el.getName() === "Component") {
+                // If renamed: { Component: MyComponent }
+                if (el.getPropertyNameNode()) {
+                  componentPropName = el.getNameNode().getText();
+                } else {
+                  componentPropName = "Component";
+                }
+              }
+            });
           }
-        });
+        }
+
+        const body = componentFn.getBody();
+        if (body) {
+          // Find where Component is used in JSX
+          // Look for <Component ... />
+          const jsxElements = body.getDescendantsOfKind(
+            SyntaxKind.JsxSelfClosingElement,
+          );
+          const componentUsage = jsxElements.find(
+            (el: any) => el.getTagNameNode().getText() === componentPropName,
+          );
+
+          if (componentUsage) {
+            // Find the root JSX element in the return statement
+            let returnStmt: any;
+            if (body.getKind() === SyntaxKind.Block) {
+              returnStmt = body.getStatementByKind(SyntaxKind.ReturnStatement);
+            } else {
+              // Arrow function implicit return
+              returnStmt = body;
+            }
+
+            if (returnStmt) {
+              let rootJsx: any;
+              if (returnStmt.getKind() === SyntaxKind.ReturnStatement) {
+                rootJsx = returnStmt.getExpression();
+                if (
+                  rootJsx &&
+                  rootJsx.getKind() === SyntaxKind.ParenthesizedExpression
+                ) {
+                  rootJsx = rootJsx.getExpression();
+                }
+              } else {
+                rootJsx = returnStmt;
+                if (
+                  rootJsx &&
+                  rootJsx.getKind() === SyntaxKind.ParenthesizedExpression
+                ) {
+                  rootJsx = rootJsx.getExpression();
+                }
+              }
+
+              const validJsxKinds = [
+                SyntaxKind.JsxElement,
+                SyntaxKind.JsxFragment,
+                SyntaxKind.JsxSelfClosingElement,
+              ];
+
+              if (rootJsx && validJsxKinds.includes(rootJsx.getKind())) {
+                // If the root JSX is NOT the Component itself, we have wrappers
+                if (rootJsx !== componentUsage) {
+                  // Extract the full JSX content
+                  let providersContent = rootJsx.getText();
+
+                  // Replace Component usage with {children}
+                  // We need to be careful with regex, but strict replace of the component tag text is safest if unique
+                  const componentText = componentUsage.getText();
+                  providersContent = providersContent.replace(
+                    componentText,
+                    "{children}",
+                  );
+
+                  // Analyze used identifiers to filter imports
+                  // This is a heuristic. We scan the providers content for identifiers
+                  // and keep imports that match.
+                  // Create a temp source file to parse the extracted JSX
+                  const tempProject = new Project({
+                    useInMemoryFileSystem: true,
+                  });
+                  const tempFile = tempProject.createSourceFile(
+                    "temp.tsx",
+                    providersContent,
+                  );
+                  const usedIdentifiers = new Set(
+                    tempFile
+                      .getDescendantsOfKind(SyntaxKind.Identifier)
+                      .map((id) => id.getText()),
+                  );
+
+                  const imports: string[] = [];
+                  sourceFile.getImportDeclarations().forEach((decl) => {
+                    const defaultImport = decl.getDefaultImport();
+                    const namedImports = decl.getNamedImports();
+
+                    let keepDecl = false;
+
+                    // Check default import
+                    if (
+                      defaultImport &&
+                      usedIdentifiers.has(defaultImport.getText())
+                    ) {
+                      keepDecl = true;
+                    }
+
+                    // Check named imports
+                    if (namedImports.length > 0) {
+                      const keptNamed = namedImports.filter((ni) =>
+                        usedIdentifiers.has(ni.getName()),
+                      );
+                      if (keptNamed.length > 0) {
+                        // Reconstruct declaration if partial (complicated),
+                        // or just keep the whole declaration if any is used (simplest for now)
+                        // Better: create clean import string
+                        keepDecl = true;
+                      }
+                    }
+
+                    // Also check namespace import
+                    const namespaceImport = decl.getNamespaceImport();
+                    if (
+                      namespaceImport &&
+                      usedIdentifiers.has(namespaceImport.getText())
+                    ) {
+                      keepDecl = true;
+                    }
+
+                    // Side effect imports (CSS) handled separately in globalCssImports
+
+                    if (keepDecl) {
+                      imports.push(decl.getText());
+                    }
+                  });
+
+                  config.providersInfo = {
+                    content: providersContent,
+                    imports: imports,
+                  };
+
+                  // Also populate legacy providers array for display/logging
+                  const helperJsx = tempFile.getDescendantsOfKind(
+                    SyntaxKind.JsxOpeningElement,
+                  );
+                  helperJsx.forEach((el: any) => {
+                    const name = el.getTagNameNode().getText();
+                    if (
+                      name.includes("Provider") ||
+                      name.match(/^[A-Z].*Context$/)
+                    ) {
+                      config.providers.push(name);
+                    }
+                  });
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

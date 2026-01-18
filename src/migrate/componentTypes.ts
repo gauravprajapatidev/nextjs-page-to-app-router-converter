@@ -18,6 +18,8 @@ export interface ClientIndicators {
 }
 
 // Known client-only libraries that require "use client"
+// NOTE: This list is now optional - the tool uses dynamic detection (see detectClientPackage.ts)
+// This static list is kept for performance optimization (fast lookup before dynamic analysis)
 export const CLIENT_ONLY_LIBRARIES = [
   "react-query",
   "@tanstack/react-query",

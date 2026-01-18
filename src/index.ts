@@ -14,9 +14,16 @@ import { mapRoute } from "./migrate/routeMapper.js";
 import { writeAppRoute } from "./migrate/writeAppRoute.js";
 import { transformPage } from "./migrate/transformPage.js";
 import { transformApi } from "./migrate/transformApi.js";
+import { transformError } from "./migrate/transformError.js";
+import { transformMiddleware } from "./migrate/transformMiddleware.js";
 import { DetectionResult } from "./migrate/detectionTypes.js";
 import { ConfidenceResult } from "./migrate/confidenceTypes.js";
-import { generateRootLayout } from "./migrate/generateLayout.js";
+import {
+  generateRootLayout,
+  extractGetLayout,
+  generateNestedLayout,
+} from "./migrate/generateLayout.js";
+import { generateLoadingFile } from "./migrate/generateLoading.js";
 import { validateProject } from "./migrate/checkConfig.js";
 import { extractAppConfig } from "./migrate/extractAppConfig.js";
 import { checkDependencies } from "./migrate/checkDeps.js";
@@ -27,10 +34,14 @@ import {
   fixClientComponentErrors,
 } from "./migrate/validateWithDevTools.js";
 import { formatProject } from "./utils/format.js";
+import {
+  analyzeNextConfig,
+  printConfigAnalysis,
+} from "./migrate/analyzeNextConfig.js";
 
 export async function migrate(
   projectPath: string,
-  options: { dryRun: boolean; validate?: boolean }
+  options: { dryRun: boolean; validate?: boolean },
 ) {
   const absoluteProjectPath = path.resolve(projectPath);
 
@@ -55,7 +66,7 @@ export async function migrate(
   if (!fs.existsSync(pagesDir)) {
     const spinner = ora("Checking project structure...").start();
     spinner.fail(
-      `Error: Could not find 'pages' or 'src/pages' directory in ${absoluteProjectPath}`
+      `Error: Could not find 'pages' or 'src/pages' directory in ${absoluteProjectPath}`,
     );
     process.exit(1);
   }
@@ -65,9 +76,24 @@ export async function migrate(
   const errorPages = pages.filter((p) => p.type === "error");
   const regularPages = pages.filter((p) => p.type === "page");
 
+  // Detect middleware file at root level
+  const middlewareExtensions = [".ts", ".js", ".tsx", ".jsx"];
+  let middlewarePath: string | null = null;
+  for (const ext of middlewareExtensions) {
+    const testPath = path.join(absoluteProjectPath, `middleware${ext}`);
+    if (fs.existsSync(testPath)) {
+      middlewarePath = testPath;
+      break;
+    }
+  }
+
   spinner.succeed(
-    `Found ${regularPages.length} pages, ${apiRoutes.length} API routes, and ${errorPages.length} error pages`
+    `Found ${regularPages.length} pages, ${apiRoutes.length} API routes, ${errorPages.length} error pages${middlewarePath ? ", and middleware file" : ""}`,
   );
+
+  // Analyze next.config.js for redirects and rewrites
+  const configAnalysis = analyzeNextConfig(absoluteProjectPath);
+  printConfigAnalysis(configAnalysis);
 
   // Determine target 'app' directory (sibling to 'pages')
   const appDir = path.join(path.dirname(pagesDir), "app");
@@ -91,18 +117,26 @@ export async function migrate(
 
       if (page.type === "api") {
         transformedContent = transformApi(page.absolutePath, originalContent);
+      } else if (page.type === "error") {
+        // Determine if this is a global-error.tsx (root-level _error.tsx)
+        const fileName = path.basename(page.relativePath, page.extension);
+        const dirName = path.dirname(page.relativePath);
+        const isGlobal =
+          fileName === "_error" && (dirName === "." || dirName === "");
+
+        transformedContent = transformError(originalContent, isGlobal);
       } else {
         transformedContent = transformPage(
           page.absolutePath,
           originalContent,
-          absoluteProjectPath
+          absoluteProjectPath,
         );
       }
 
       const migrated = await writeAppRoute(
         targetPath,
         transformedContent,
-        options
+        options,
       );
       if (migrated) {
         const action = options.dryRun ? "Migrated (Dry Run)" : "Migrated";
@@ -112,6 +146,39 @@ export async function migrate(
           confidence: confidence.confidence,
           status: "Success",
         });
+
+        // Generate loading.tsx for regular pages (not API routes or error pages)
+        if (page.type === "page") {
+          try {
+            await generateLoadingFile(targetPath, page, {
+              ...options,
+              useTypeScript,
+            });
+          } catch (error) {
+            // Silently fail - loading.tsx is optional
+          }
+
+          // Extract and generate nested layout if Page.getLayout pattern exists
+          try {
+            const layoutInfo = extractGetLayout(
+              originalContent,
+              page.absolutePath,
+              absoluteProjectPath,
+            );
+
+            if (layoutInfo) {
+              // Generate layout.tsx in the same directory as the page
+              const layoutDir = path.dirname(targetPath);
+              await generateNestedLayout(layoutDir, layoutInfo, {
+                ...options,
+                useTypeScript,
+              });
+            }
+          } catch (error) {
+            // Silently fail - layout generation is optional
+            // If getLayout extraction fails, the page will still be migrated
+          }
+        }
       } else {
         // Skipped
         pageSpinner.warn(`Skipped: ${page.relativePath} (Target exists)`);
@@ -144,7 +211,7 @@ export async function migrate(
   try {
     const appConfig = extractAppConfig(
       appFile?.absolutePath,
-      documentFile?.absolutePath
+      documentFile?.absolutePath,
     );
 
     // Collect manual steps from config
@@ -152,7 +219,7 @@ export async function migrate(
       manualSteps.push(
         `Context Providers were found in _app.js. These have been commented out in layout.${
           useTypeScript ? "tsx" : "js"
-        }. Please refactor them into a Client Component wrapper.`
+        }. Please refactor them into a Client Component wrapper.`,
       );
     }
 
@@ -163,7 +230,7 @@ export async function migrate(
     if (created) {
       const action = options.dryRun ? "Generated (Dry Run)" : "Generated";
       layoutSpinner.succeed(
-        `${action}: Root Layout (layout.${useTypeScript ? "tsx" : "js"})`
+        `${action}: Root Layout (layout.${useTypeScript ? "tsx" : "js"})`,
       );
     } else {
       layoutSpinner.info("Root Layout already exists");
@@ -177,6 +244,57 @@ export async function migrate(
     await formatProject(absoluteProjectPath, appDir);
   }
 
+  // Migrate middleware (stays at root level, not in app/)
+  if (middlewarePath) {
+    const middlewareSpinner = ora("Processing middleware...").start();
+    try {
+      const originalContent = fs.readFileSync(middlewarePath, "utf8");
+      const transformedContent = transformMiddleware(
+        middlewarePath,
+        originalContent,
+      );
+
+      // Middleware stays at root level (same location for App Router)
+      const targetMiddlewarePath = middlewarePath; // Keep at root
+
+      if (options.dryRun) {
+        middlewareSpinner.succeed("Middleware migration (Dry Run)");
+        results.push({
+          page: path.relative(absoluteProjectPath, middlewarePath),
+          confidence: "safe",
+          status: "Success",
+        });
+      } else {
+        // Only write if content changed (to avoid unnecessary file writes)
+        if (transformedContent !== originalContent) {
+          await fs.writeFile(targetMiddlewarePath, transformedContent);
+          middlewareSpinner.succeed("Middleware migrated");
+          results.push({
+            page: path.relative(absoluteProjectPath, middlewarePath),
+            confidence: "safe",
+            status: "Success",
+          });
+        } else {
+          middlewareSpinner.info(
+            "Middleware already compatible (no changes needed)",
+          );
+          results.push({
+            page: path.relative(absoluteProjectPath, middlewarePath),
+            confidence: "safe",
+            status: "Skipped",
+          });
+        }
+      }
+    } catch (e: any) {
+      middlewareSpinner.fail(`Failed to migrate middleware: ${e.message}`);
+      results.push({
+        page: path.relative(absoluteProjectPath, middlewarePath),
+        confidence: "unsafe",
+        status: "Error",
+      });
+    }
+  }
+
   printManualSteps(manualSteps);
 
   // Runtime validation with Next.js DevTools (optional)
@@ -186,9 +304,8 @@ export async function migrate(
     console.log(chalk.cyan("━".repeat(50)) + "\n");
 
     try {
-      const { port, process: devProcess } = await startDevServer(
-        absoluteProjectPath
-      );
+      const { port, process: devProcess } =
+        await startDevServer(absoluteProjectPath);
 
       // Wait a bit for the server to fully start
       await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -206,7 +323,7 @@ export async function migrate(
 
         // Attempt to fix client component errors
         const clientErrors = validationResult.errors.filter(
-          (e) => e.type === "client-component"
+          (e) => e.type === "client-component",
         );
         if (clientErrors.length > 0) {
           await fixClientComponentErrors(clientErrors);
@@ -218,7 +335,7 @@ export async function migrate(
       if (validationResult.warnings.length > 0) {
         console.log(chalk.yellow("\nWarnings:"));
         validationResult.warnings.forEach((w) =>
-          console.log(chalk.yellow(`  • ${w}`))
+          console.log(chalk.yellow(`  • ${w}`)),
         );
       }
 
@@ -229,13 +346,13 @@ export async function migrate(
       console.log(chalk.red(`\n✗ Validation failed: ${error.message}`));
       console.log(
         chalk.yellow(
-          "You can manually verify the migration by running 'npm run dev'"
-        )
+          "You can manually verify the migration by running 'npm run dev'",
+        ),
       );
     }
   } else if (options.validate && options.dryRun) {
     console.log(
-      chalk.yellow("\n⚠️  Runtime validation is not available in dry-run mode")
+      chalk.yellow("\n⚠️  Runtime validation is not available in dry-run mode"),
     );
   }
 }

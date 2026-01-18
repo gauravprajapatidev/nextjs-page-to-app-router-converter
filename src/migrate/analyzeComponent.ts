@@ -8,6 +8,7 @@ import {
   BROWSER_APIS,
   REACT_HOOKS,
 } from "./componentTypes.js";
+import { isClientOnlyPackage } from "./detectClientPackage.js";
 
 /**
  * Analyzes a component file to determine if it should be a client or server component
@@ -63,7 +64,7 @@ export function analyzeComponentFile(
   indicators.browserAPIs = browserAPIs;
 
   // Detect client-only libraries
-  const clientLibraries = detectClientLibraries(sourceFile);
+  const clientLibraries = detectClientLibraries(sourceFile, projectRoot);
   indicators.clientLibraries = clientLibraries;
 
   // Analyze imported components (if projectRoot provided)
@@ -205,24 +206,37 @@ function detectBrowserAPIs(sourceFile: SourceFile): string[] {
 }
 
 /**
- * Detects client-only library imports
+ * Detects client-only library imports using dynamic detection
  */
-function detectClientLibraries(sourceFile: SourceFile): string[] {
+function detectClientLibraries(sourceFile: SourceFile, projectRoot?: string): string[] {
   const libraries = new Set<string>();
 
   sourceFile.getImportDeclarations().forEach((importDecl) => {
     const moduleSpecifier = importDecl.getModuleSpecifierValue();
 
-    // Check if it's a known client-only library
-    if (CLIENT_ONLY_LIBRARIES.includes(moduleSpecifier)) {
-      libraries.add(moduleSpecifier);
+    // Skip relative/local imports (handled separately)
+    if (moduleSpecifier.startsWith(".") || moduleSpecifier.startsWith("/")) {
+      return;
     }
 
-    // Also check for scoped packages
+    // First check the static list for backward compatibility (faster)
+    if (CLIENT_ONLY_LIBRARIES.includes(moduleSpecifier)) {
+      libraries.add(moduleSpecifier);
+      return;
+    }
+
+    // Check for scoped packages in static list
     for (const lib of CLIENT_ONLY_LIBRARIES) {
       if (moduleSpecifier.startsWith(lib + "/")) {
         libraries.add(lib);
+        return;
       }
+    }
+
+    // Use dynamic detection for unknown packages
+    const isClient = isClientOnlyPackage(moduleSpecifier, projectRoot);
+    if (isClient === true) {
+      libraries.add(moduleSpecifier);
     }
   });
 

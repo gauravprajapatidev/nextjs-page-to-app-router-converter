@@ -55,7 +55,7 @@ export function scanPages(dir: string, rootDir: string = dir): ScanResult {
         appFile = pageFile;
       } else if (file.startsWith("_document")) {
         documentFile = pageFile;
-      } else if (PAGE_EXTENSIONS.includes(ext) && !file.startsWith("_")) {
+      } else if (PAGE_EXTENSIONS.includes(ext) && (!file.startsWith("_") || file.startsWith("_error"))) {
          if (isApi) {
              apiRoutes.push(pageFile);
          } else {
