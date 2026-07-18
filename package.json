@@ -60,5 +60,13 @@
     "@types/semver": "^7.7.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gauravprajapatidev/nextjs-page-to-app-router-converter.git"
+  },
+  "homepage": "https://github.com/gauravprajapatidev/nextjs-page-to-app-router-converter#readme",
+  "bugs": {
+    "url": "https://github.com/gauravprajapatidev/nextjs-page-to-app-router-converter/issues"
   }
 }
