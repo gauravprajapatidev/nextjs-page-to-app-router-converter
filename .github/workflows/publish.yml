@@ -11,7 +11,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # optional: only if your npm token was restricted to a GitHub environment
+    # optional: only if your trusted publisher config has an environment name set
     # environment: production
 
     steps:
@@ -25,6 +25,12 @@ jobs:
           registry-url: https://registry.npmjs.org/
           cache: npm
           always-auth: true
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Verify npm version
+        run: npm --version
 
       - name: Install Dependencies
         run: npm ci
