@@ -9,7 +9,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "dev": "ts-node --esm ./src/cli.ts"
+    "dev": "ts-node --esm ./src/cli.ts",
+    "changeset": "changeset",
+    "version-packages": "changeset version"
   },
   "keywords": [
     "nextjs",
