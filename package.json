@@ -1,6 +1,6 @@
 {
   "name": "next-page-to-app-converter",
-  "version": "1.0.6",
+  "version": "1.1.0",
   "description": "Convert Next.js Pages Router to App Router",
   "main": "dist/index.js",
   "bin": {
